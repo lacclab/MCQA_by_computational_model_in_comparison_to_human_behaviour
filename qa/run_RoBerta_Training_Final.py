@@ -47,7 +47,7 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-from pytorch_pretrained_bert.modeling import (BertForMultipleChoice, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
+#from pytorch_pretrained_bert.modeling import (BertForMultipleChoice, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
 from transformers import get_linear_schedule_with_warmup
 from transformers import RobertaConfig
 from transformers import RobertaTokenizer, RobertaForMultipleChoice
@@ -55,7 +55,8 @@ import transformers
 
 transformers.logging.set_verbosity_error()
 from load_data import read_race_examples, read_onestop
-
+CONFIG_NAME = "config.json"
+WEIGHTS_NAME = "lastepoch"
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
@@ -209,7 +210,7 @@ def main():
     #                     type=str,
     #                     required=True,
     #                     help="The input data dir. Should contain the .csv files (or other data files) for the task.")
-    parser.add_argument("--RoBerta_model", default='roberta-base', type=str, required=True,
+    parser.add_argument("--RoBerta_model", default='roberta-base', type=str, required=False,
                         help="roberta-base")
 
     parser.add_argument("--output_dir",
@@ -400,12 +401,13 @@ def main():
                 batch = tuple(t.to(device) for t in batch)
                 input_ids, input_mask, label_ids = batch
 
-                loss = model(input_ids=input_ids, attention_mask=input_mask, labels=label_ids)
+                output = model(input_ids=input_ids, attention_mask=input_mask, labels=label_ids)
+                loss = output.loss
                 if n_gpu > 1:
-                    loss = loss.loss.mean()
+                    loss = loss.mean()
 
                 if args.gradient_accumulation_steps > 1:
-                    loss = loss.loss / args.gradient_accumulation_steps
+                    loss = loss / args.gradient_accumulation_steps
 
                 tr_loss += loss
                 nb_tr_examples += input_ids.size(0)
@@ -505,7 +507,15 @@ def main():
         with open(output_config_file, 'w') as f:
             f.write(model_to_save.config.to_json_string())
         # Load a trained model and config that you have fine-tuned
-        config = RobertaConfig(output_config_file)
+        import json
+
+        # Load the JSON file
+        with open(output_config_file, 'r') as f:
+            json_data = f.read()
+
+        # Parse the JSON data into a Python dictionary
+        config_dict = json.loads(json_data)
+        config = RobertaConfig(**config_dict)
         model = RobertaForMultipleChoice(config)
         model.load_state_dict(torch.load(output_model_file))
     else:
@@ -541,18 +551,20 @@ def main():
 
             with torch.no_grad():
                 # tmp_eval_loss = model(input_ids, input_mask, label_ids)
-                tmp_eval_loss = model(input_ids=input_ids, attention_mask=input_mask, labels=label_ids)
-                logits = model(input_ids=input_ids, attention_mask=input_mask)
+                output = model(input_ids=input_ids, attention_mask=input_mask, labels=label_ids) # TODO why do I need this?
+                tmp_eval_loss = output.loss
+                output = model(input_ids=input_ids, attention_mask=input_mask)
+                logits = output.logits
             #print(logits)
 
-            # logits = logits.detach().cpu().numpy()
-            logits = logits.numpy()
+            logits = logits.detach().cpu().numpy()
+            #logits = logits.numpy()
             eval_results.append(logits)
             label_ids = label_ids.to('cpu').numpy()
             tmp_eval_accuracy = accuracy(logits, label_ids)
 
             # eval_loss += tmp_eval_loss.mean().item()
-            eval_loss += tmp_eval_loss.loss().mean()
+            eval_loss += tmp_eval_loss.mean()
 
             eval_accuracy += tmp_eval_accuracy
 
